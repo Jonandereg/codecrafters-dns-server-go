@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"net"
+	"os"
+	"strings"
 )
 
 func main() {
@@ -32,7 +35,6 @@ func main() {
 		receivedData := string(buf[:size])
 		fmt.Printf("Received %d bytes from %s: %s\n", size, source, receivedData)
 
-		// Create an empty response
 		dnsMessage := DNSMessage{}
 		response := dnsMessage.writeResponse()
 
@@ -51,7 +53,11 @@ type DNSMessage struct {
 
 func (dm *DNSMessage) writeResponse() []byte {
 	dm.writeHeader()
-	return dm.header
+	dm.writeQuestion()
+	res := make([]byte, 0, 32)
+	res = append(res, dm.header...)
+	res = append(res, dm.question...)
+	return res
 }
 
 func (dm *DNSMessage) writeHeader() {
@@ -90,4 +96,42 @@ func buildFlags() uint16 {
 	flags |= rCode
 
 	return flags
+}
+
+func (dm *DNSMessage) writeQuestion() {
+	buf := bytes.NewBuffer([]byte{})
+
+	qname, err := buildQuestionName("codecrafter.io")
+	if err != nil {
+		fmt.Println("Failed to build question name:", err)
+	}
+	buf.Write(qname)
+
+	recordType := uint16(1)
+	if err := binary.Write(buf, binary.BigEndian, recordType); err != nil {
+		fmt.Println("Failed to write recordType:", err)
+		os.Exit(1)
+	}
+
+	recordClass := uint16(1)
+	if err := binary.Write(buf, binary.BigEndian, recordClass); err != nil {
+		fmt.Println("Failed to write recordClass:", err)
+		os.Exit(1)
+	}
+	dm.question = buf.Bytes()
+}
+
+func buildQuestionName(d string) ([]byte, error) {
+	b := bytes.NewBuffer([]byte{})
+	labelsArray := strings.Split(d, ".")
+	for _, label := range labelsArray {
+		l := len(label)
+		if l > 63 {
+			return nil, fmt.Errorf("label too long")
+		}
+		b.WriteByte(byte(l))
+		b.WriteString(label)
+	}
+	b.WriteByte(0)
+	return b.Bytes(), nil
 }
