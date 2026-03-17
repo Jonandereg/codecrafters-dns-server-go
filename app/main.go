@@ -96,7 +96,7 @@ func (dm *DNSMessage) writeHeader() {
 	binary.BigEndian.PutUint16(header[0:2], dm.header.ID)
 
 	f := Flags{
-		qr:         dm.header.qr,
+
 		opCode:     dm.header.opCode,
 		rd:         dm.header.rd,
 		aa:         dm.header.aa,
@@ -117,7 +117,7 @@ func (dm *DNSMessage) writeHeader() {
 
 func writeFlags(f Flags) uint16 {
 	flags := uint16(0)
-	qr := f.qr
+	qr := uint16(1)
 	flags |= qr << 15
 	opcode := f.opCode
 	flags |= opcode << 11
