@@ -54,11 +54,8 @@ func main() {
 }
 
 type DNSMessage struct {
-	rawRequest  []byte
-	headerMsg   []byte
-	questionMsg []byte
-	answerMsg   []byte
-	header      Header
+	rawRequest []byte
+	header     Header
 }
 type Header struct {
 	ID      uint16
@@ -76,34 +73,29 @@ type Flags struct {
 }
 
 func (dm *DNSMessage) writeResponse() ([]byte, error) {
-	if err := dm.writeQuestion(); err != nil {
-		return nil, err
+	q, err := dm.writeQuestion()
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to write question: %v", err)
 	}
-	if err := dm.writeAnswer(); err != nil {
-		return nil, err
+	a, err := dm.writeAnswer()
+	if err != nil {
+		return nil, fmt.Errorf("failed to write answer: %v", err)
 	}
-	dm.writeHeader()
+	h := dm.writeHeader()
 	res := make([]byte, 0, 32)
-	res = append(res, dm.headerMsg...)
-	res = append(res, dm.questionMsg...)
-	res = append(res, dm.answerMsg...)
+	res = append(res, h...)
+	res = append(res, q...)
+	res = append(res, a...)
 	return res, nil
 }
 
-func (dm *DNSMessage) writeHeader() {
+func (dm *DNSMessage) writeHeader() []byte {
 	header := make([]byte, 12)
 
 	binary.BigEndian.PutUint16(header[0:2], dm.header.ID)
 
-	f := Flags{
-
-		opCode:     dm.header.opCode,
-		rd:         dm.header.rd,
-		aa:         dm.header.aa,
-		truncation: dm.header.truncation,
-		rCode:      dm.header.rCode,
-	}
-	flags := writeFlags(f)
+	flags := writeFlags(dm.header.Flags)
 
 	binary.BigEndian.PutUint16(header[2:4], flags)
 	binary.BigEndian.PutUint16(header[4:6], dm.header.qCount)
@@ -112,7 +104,7 @@ func (dm *DNSMessage) writeHeader() {
 	binary.BigEndian.PutUint16(header[8:10], nsCount)
 	arCount := uint16(0)
 	binary.BigEndian.PutUint16(header[10:12], arCount)
-	dm.headerMsg = append(dm.headerMsg, header...)
+	return header
 }
 
 func writeFlags(f Flags) uint16 {
@@ -136,27 +128,27 @@ func writeFlags(f Flags) uint16 {
 	return flags
 }
 
-func (dm *DNSMessage) writeQuestion() error {
+func (dm *DNSMessage) writeQuestion() ([]byte, error) {
 	buf := bytes.NewBuffer([]byte{})
 
 	qname, err := buildQuestionName("codecrafters.io")
 	if err != nil {
-		return fmt.Errorf("failed to build questionMsg name: %v", err)
+		return nil, fmt.Errorf("failed to build questionMsg name: %v", err)
 	}
 	buf.Write(qname)
 
 	recordType := uint16(1)
 	if err := binary.Write(buf, binary.BigEndian, recordType); err != nil {
-		return fmt.Errorf("failed to write recordType: %v", err)
+		return nil, fmt.Errorf("failed to write recordType: %v", err)
 	}
 
 	recordClass := uint16(1)
 	if err := binary.Write(buf, binary.BigEndian, recordClass); err != nil {
-		return fmt.Errorf("failed to write recordClass: %v", err)
+		return nil, fmt.Errorf("failed to write recordClass: %v", err)
 	}
 	dm.header.qCount = uint16(1)
-	dm.questionMsg = buf.Bytes()
-	return nil
+
+	return buf.Bytes(), nil
 }
 
 func buildQuestionName(d string) ([]byte, error) {
@@ -174,34 +166,34 @@ func buildQuestionName(d string) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-func (dm *DNSMessage) writeAnswer() error {
+func (dm *DNSMessage) writeAnswer() ([]byte, error) {
 	testIp := net.ParseIP("127.0.0.1").To4()
 	buf := bytes.NewBuffer([]byte{})
 	name, err := buildQuestionName("codecrafters.io")
 	if err != nil {
-		return fmt.Errorf("failed to build questionMsg name: %v", err)
+		return nil, fmt.Errorf("failed to build questionMsg name: %v", err)
 	}
 	buf.Write(name)
 	recordType := uint16(1)
 	if err := binary.Write(buf, binary.BigEndian, recordType); err != nil {
-		return fmt.Errorf("failed to write recordType: %v", err)
+		return nil, fmt.Errorf("failed to write recordType: %v", err)
 	}
 	classType := uint16(1)
 	if err := binary.Write(buf, binary.BigEndian, classType); err != nil {
-		return fmt.Errorf("failed to write classType: %v", err)
+		return nil, fmt.Errorf("failed to write classType: %v", err)
 	}
 	ttl := uint32(60)
 	if err := binary.Write(buf, binary.BigEndian, ttl); err != nil {
-		return fmt.Errorf("failed to write ttl: %v", err)
+		return nil, fmt.Errorf("failed to write ttl: %v", err)
 	}
 	length := uint16(len(testIp))
 	if err := binary.Write(buf, binary.BigEndian, length); err != nil {
-		return fmt.Errorf("failed to write length: %v", err)
+		return nil, fmt.Errorf("failed to write length: %v", err)
 	}
 	buf.Write(testIp)
 	dm.header.anCount = uint16(1)
-	dm.answerMsg = buf.Bytes()
-	return nil
+
+	return buf.Bytes(), nil
 }
 
 func (dm *DNSMessage) parseQuery() error {
@@ -220,12 +212,7 @@ func (dm *DNSMessage) parseHeader() error {
 	flags := binary.BigEndian.Uint16(rawHeader[2:4])
 	f := parseFlags(flags)
 	dm.header.ID = id
-	dm.header.qr = f.qr
-	dm.header.opCode = f.opCode
-	dm.header.rd = f.rd
-	dm.header.aa = f.aa
-	dm.header.truncation = f.truncation
-	dm.header.rCode = f.rCode
+	dm.header.Flags = f
 	return nil
 }
 
