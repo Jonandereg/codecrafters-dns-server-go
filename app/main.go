@@ -37,6 +37,9 @@ func main() {
 		dnsMessage := DNSMessage{
 			rawRequest: rawRequest,
 		}
+		if err := dnsMessage.parseQuery(); err != nil {
+			fmt.Println("Failed to parse DNS message:", err)
+		}
 		response, err := dnsMessage.writeResponse()
 		if err != nil {
 			fmt.Println("Error writing response:", err)
@@ -89,8 +92,8 @@ func (dm *DNSMessage) writeResponse() ([]byte, error) {
 
 func (dm *DNSMessage) writeHeader() {
 	header := make([]byte, 12)
-	id := uint16(1234)
-	binary.BigEndian.PutUint16(header[0:2], id)
+
+	binary.BigEndian.PutUint16(header[0:2], dm.header.ID)
 
 	f := Flags{
 		qr:         dm.header.qr,
@@ -198,6 +201,13 @@ func (dm *DNSMessage) writeAnswer() error {
 	buf.Write(testIp)
 	dm.header.anCount = uint16(1)
 	dm.answerMsg = buf.Bytes()
+	return nil
+}
+
+func (dm *DNSMessage) parseQuery() error {
+	if err := dm.parseHeader(); err != nil {
+		return fmt.Errorf("failed to parse header: %v", err)
+	}
 	return nil
 }
 
