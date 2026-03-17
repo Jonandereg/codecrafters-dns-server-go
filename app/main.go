@@ -30,11 +30,13 @@ func main() {
 			fmt.Println("Error receiving data:", err)
 			break
 		}
-
-		receivedData := string(buf[:size])
+		rawRequest := buf[:size]
+		receivedData := string(rawRequest)
 		fmt.Printf("Received %d bytes from %s: %s\n", size, source, receivedData)
 
-		dnsMessage := DNSMessage{}
+		dnsMessage := DNSMessage{
+			rawRequest: rawRequest,
+		}
 		response, err := dnsMessage.writeResponse()
 		if err != nil {
 			fmt.Println("Error writing response:", err)
@@ -49,14 +51,25 @@ func main() {
 }
 
 type DNSMessage struct {
-	header   []byte
-	question []byte
-	answer   []byte
+	rawRequest  []byte
+	headerMsg   []byte
+	questionMsg []byte
+	answerMsg   []byte
+	header      Header
+}
+type Header struct {
+	ID      uint16
+	qCount  uint16
+	anCount uint16
 	Flags
 }
 type Flags struct {
-	qCount  uint16
-	anCount uint16
+	qr         uint16
+	opCode     uint16
+	rd         uint16
+	aa         uint16
+	truncation uint16
+	rCode      uint16
 }
 
 func (dm *DNSMessage) writeResponse() ([]byte, error) {
@@ -68,9 +81,9 @@ func (dm *DNSMessage) writeResponse() ([]byte, error) {
 	}
 	dm.writeHeader()
 	res := make([]byte, 0, 32)
-	res = append(res, dm.header...)
-	res = append(res, dm.question...)
-	res = append(res, dm.answer...)
+	res = append(res, dm.headerMsg...)
+	res = append(res, dm.questionMsg...)
+	res = append(res, dm.answerMsg...)
 	return res, nil
 }
 
@@ -78,33 +91,43 @@ func (dm *DNSMessage) writeHeader() {
 	header := make([]byte, 12)
 	id := uint16(1234)
 	binary.BigEndian.PutUint16(header[0:2], id)
-	flags := buildFlags()
+
+	f := Flags{
+		qr:         dm.header.qr,
+		opCode:     dm.header.opCode,
+		rd:         dm.header.rd,
+		aa:         dm.header.aa,
+		truncation: dm.header.truncation,
+		rCode:      dm.header.rCode,
+	}
+	flags := writeFlags(f)
+
 	binary.BigEndian.PutUint16(header[2:4], flags)
-	binary.BigEndian.PutUint16(header[4:6], dm.qCount)
-	binary.BigEndian.PutUint16(header[6:8], dm.anCount)
+	binary.BigEndian.PutUint16(header[4:6], dm.header.qCount)
+	binary.BigEndian.PutUint16(header[6:8], dm.header.anCount)
 	nsCount := uint16(0)
 	binary.BigEndian.PutUint16(header[8:10], nsCount)
 	arCount := uint16(0)
 	binary.BigEndian.PutUint16(header[10:12], arCount)
-	dm.header = append(dm.header, header...)
+	dm.headerMsg = append(dm.headerMsg, header...)
 }
 
-func buildFlags() uint16 {
+func writeFlags(f Flags) uint16 {
 	flags := uint16(0)
-	qr := uint16(1)
+	qr := f.qr
 	flags |= qr << 15
-	opcode := uint16(0)
+	opcode := f.opCode
 	flags |= opcode << 11
-	aa := uint16(0)
+	aa := f.aa
 	flags |= aa << 10
-	truncation := uint16(0)
+	truncation := f.truncation
 	flags |= truncation << 9
-	recursionDesired := uint16(0)
+	recursionDesired := f.rd
 	flags |= recursionDesired << 8
 	recursionAvailable := uint16(0)
 	flags |= recursionAvailable << 7
 	// 3 bits reserved
-	rCode := uint16(0)
+	rCode := f.rCode
 	flags |= rCode
 
 	return flags
@@ -115,7 +138,7 @@ func (dm *DNSMessage) writeQuestion() error {
 
 	qname, err := buildQuestionName("codecrafters.io")
 	if err != nil {
-		return fmt.Errorf("failed to build question name: %v", err)
+		return fmt.Errorf("failed to build questionMsg name: %v", err)
 	}
 	buf.Write(qname)
 
@@ -128,8 +151,8 @@ func (dm *DNSMessage) writeQuestion() error {
 	if err := binary.Write(buf, binary.BigEndian, recordClass); err != nil {
 		return fmt.Errorf("failed to write recordClass: %v", err)
 	}
-	dm.qCount = uint16(1)
-	dm.question = buf.Bytes()
+	dm.header.qCount = uint16(1)
+	dm.questionMsg = buf.Bytes()
 	return nil
 }
 
@@ -153,7 +176,7 @@ func (dm *DNSMessage) writeAnswer() error {
 	buf := bytes.NewBuffer([]byte{})
 	name, err := buildQuestionName("codecrafters.io")
 	if err != nil {
-		return fmt.Errorf("failed to build question name: %v", err)
+		return fmt.Errorf("failed to build questionMsg name: %v", err)
 	}
 	buf.Write(name)
 	recordType := uint16(1)
@@ -173,7 +196,42 @@ func (dm *DNSMessage) writeAnswer() error {
 		return fmt.Errorf("failed to write length: %v", err)
 	}
 	buf.Write(testIp)
-	dm.anCount = uint16(1)
-	dm.answer = buf.Bytes()
+	dm.header.anCount = uint16(1)
+	dm.answerMsg = buf.Bytes()
 	return nil
+}
+
+func (dm *DNSMessage) parseHeader() error {
+	if len(dm.rawRequest) < 12 {
+		return fmt.Errorf("bad request, header is too short")
+	}
+	rawHeader := dm.rawRequest[:12]
+	id := binary.BigEndian.Uint16(rawHeader[0:2])
+	flags := binary.BigEndian.Uint16(rawHeader[2:4])
+	f := parseFlags(flags)
+	dm.header.ID = id
+	dm.header.qr = f.qr
+	dm.header.opCode = f.opCode
+	dm.header.rd = f.rd
+	dm.header.aa = f.aa
+	dm.header.truncation = f.truncation
+	dm.header.rCode = f.rCode
+	return nil
+}
+
+func parseFlags(f uint16) Flags {
+	qr := (f >> 15) & 1
+	opcode := (f >> 11) & 0b1111
+	aa := (f >> 10) & 1
+	truncation := (f >> 9) & 1
+	rd := (f >> 8) & 1
+	rCode := f & 0b1111
+	return Flags{
+		qr:         qr,
+		opCode:     opcode,
+		rd:         rd,
+		aa:         aa,
+		truncation: truncation,
+		rCode:      rCode,
+	}
 }
