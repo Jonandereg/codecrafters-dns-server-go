@@ -53,6 +53,8 @@ func main() {
 type DNSMessage struct {
 	rawRequest []byte
 	header     Header
+	question   Question
+	reader     *bytes.Reader
 }
 type Header struct {
 	ID      uint16
@@ -67,6 +69,11 @@ type Flags struct {
 	aa         uint16
 	truncation uint16
 	rCode      uint16
+}
+type Question struct {
+	Name  string
+	Type  uint16
+	Class uint16
 }
 
 func (dm *DNSMessage) writeResponse() ([]byte, error) {
@@ -120,7 +127,11 @@ func writeFlags(f Flags) uint16 {
 	recursionAvailable := uint16(0)
 	flags |= recursionAvailable << 7
 	// 3 bits reserved
-	rCode := f.rCode
+	rCode := uint16(0)
+	if opcode != 0 {
+		rCode = uint16(4)
+	}
+
 	flags |= rCode
 
 	return flags
@@ -129,18 +140,18 @@ func writeFlags(f Flags) uint16 {
 func (dm *DNSMessage) writeQuestion() ([]byte, error) {
 	buf := bytes.NewBuffer([]byte{})
 
-	qname, err := buildQuestionName("codecrafters.io")
+	qname, err := writeQuestionName(dm.question.Name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build questionMsg name: %v", err)
 	}
 	buf.Write(qname)
 
-	recordType := uint16(1)
+	recordType := dm.question.Type
 	if err := binary.Write(buf, binary.BigEndian, recordType); err != nil {
 		return nil, fmt.Errorf("failed to write recordType: %v", err)
 	}
 
-	recordClass := uint16(1)
+	recordClass := dm.question.Class
 	if err := binary.Write(buf, binary.BigEndian, recordClass); err != nil {
 		return nil, fmt.Errorf("failed to write recordClass: %v", err)
 	}
@@ -149,7 +160,7 @@ func (dm *DNSMessage) writeQuestion() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func buildQuestionName(d string) ([]byte, error) {
+func writeQuestionName(d string) ([]byte, error) {
 	b := bytes.NewBuffer([]byte{})
 	labelsArray := strings.Split(d, ".")
 	for _, label := range labelsArray {
@@ -167,19 +178,11 @@ func buildQuestionName(d string) ([]byte, error) {
 func (dm *DNSMessage) writeAnswer() ([]byte, error) {
 	testIp := net.ParseIP("127.0.0.1").To4()
 	buf := bytes.NewBuffer([]byte{})
-	name, err := buildQuestionName("codecrafters.io")
+	questionBuf, err := dm.writeQuestion()
 	if err != nil {
-		return nil, fmt.Errorf("failed to build questionMsg name: %v", err)
+		return nil, fmt.Errorf("failed to write question: %v", err)
 	}
-	buf.Write(name)
-	recordType := uint16(1)
-	if err := binary.Write(buf, binary.BigEndian, recordType); err != nil {
-		return nil, fmt.Errorf("failed to write recordType: %v", err)
-	}
-	classType := uint16(1)
-	if err := binary.Write(buf, binary.BigEndian, classType); err != nil {
-		return nil, fmt.Errorf("failed to write classType: %v", err)
-	}
+	buf.Write(questionBuf)
 	ttl := uint32(60)
 	if err := binary.Write(buf, binary.BigEndian, ttl); err != nil {
 		return nil, fmt.Errorf("failed to write ttl: %v", err)
@@ -195,6 +198,7 @@ func (dm *DNSMessage) writeAnswer() ([]byte, error) {
 }
 
 func (dm *DNSMessage) parseQuery() error {
+	dm.reader = bytes.NewReader(dm.rawRequest)
 	if err := dm.parseHeader(); err != nil {
 		return fmt.Errorf("failed to parse header: %v", err)
 	}
@@ -202,10 +206,16 @@ func (dm *DNSMessage) parseQuery() error {
 }
 
 func (dm *DNSMessage) parseHeader() error {
-	if len(dm.rawRequest) < 12 {
-		return fmt.Errorf("bad request, header is too short")
+	r := dm.reader
+	rawHeader := make([]byte, 12)
+	n, err := r.Read(rawHeader)
+	if err != nil {
+		return fmt.Errorf("failed to read header: %v", err)
 	}
-	rawHeader := dm.rawRequest[:12]
+	if n != 12 {
+		return fmt.Errorf("bad header")
+	}
+
 	id := binary.BigEndian.Uint16(rawHeader[0:2])
 	flags := binary.BigEndian.Uint16(rawHeader[2:4])
 	f := parseFlags(flags)
@@ -220,10 +230,6 @@ func parseFlags(f uint16) Flags {
 	aa := (f >> 10) & 1
 	truncation := (f >> 9) & 1
 	rd := (f >> 8) & 1
-	rCode := uint16(0)
-	if opcode != 0 {
-		rCode = uint16(4)
-	}
 
 	return Flags{
 		qr:         qr,
@@ -231,6 +237,61 @@ func parseFlags(f uint16) Flags {
 		rd:         rd,
 		aa:         aa,
 		truncation: truncation,
-		rCode:      rCode,
 	}
+}
+
+func (dm *DNSMessage) parseQuestion() error {
+	r := dm.reader
+	var nameBytes []byte
+	for {
+		b, err := r.ReadByte()
+		if err != nil {
+			return fmt.Errorf("failed to read question: %v", err)
+		}
+		if b == 0x00 {
+			nameBytes = append(nameBytes, b)
+			break
+		}
+		nameBytes = append(nameBytes, b)
+	}
+	name, err := parseQuestionName(nameBytes)
+	if err != nil {
+		return fmt.Errorf("failed to parse question name: %v", err)
+	}
+	var qType uint16
+	if err := binary.Read(r, binary.BigEndian, &qType); err != nil {
+		return fmt.Errorf("failed to read question type: %v", err)
+	}
+	var qClass uint16
+	if err := binary.Read(r, binary.BigEndian, &qClass); err != nil {
+		return fmt.Errorf("failed to read question class: %v", err)
+	}
+	dm.question = Question{
+		Name:  name,
+		Class: qClass,
+		Type:  qType,
+	}
+
+	return nil
+}
+
+func parseQuestionName(n []byte) (string, error) {
+	r := bytes.NewReader(n)
+	var name string
+	for {
+		b, err := r.ReadByte()
+		if err != nil {
+			return "", fmt.Errorf("failed to read name:%v", err)
+		}
+		if b == 0x00 {
+			break
+		}
+		label := make([]byte, b)
+		if _, err := r.Read(label); err != nil {
+			return "", fmt.Errorf("failed to read label:%v", err)
+		}
+		name += string(label)
+	}
+
+	return name, nil
 }
