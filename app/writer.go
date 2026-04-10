@@ -37,10 +37,11 @@ func (dm *DNSMessage) writeHeader(qCount *uint16) []byte {
 	binary.BigEndian.PutUint16(header[2:4], flags)
 	if qCount != nil {
 		binary.BigEndian.PutUint16(header[4:6], *qCount)
+		binary.BigEndian.PutUint16(header[6:8], uint16(0))
 	} else {
 		binary.BigEndian.PutUint16(header[4:6], dm.header.qCount)
+		binary.BigEndian.PutUint16(header[6:8], dm.header.anCount)
 	}
-	binary.BigEndian.PutUint16(header[6:8], dm.header.anCount)
 	nsCount := uint16(0)
 	binary.BigEndian.PutUint16(header[8:10], nsCount)
 	arCount := uint16(0)
