@@ -13,22 +13,21 @@ func (dm *DNSMessage) forwardRequest() ([]byte, error) {
 		// handle error
 	}
 	defer conn.Close()
-	qc := uint16(1)
-	baseHeader := dm.writeHeader(&qc)
+	baseHeader := dm.writeHeader(new(uint16(1)))
 	buf := new(bytes.Buffer)
 	for i := 0; i < int(dm.header.qCount); i++ {
 		req, err := writeForwardRequest(baseHeader, dm.questions[i])
 		if err != nil {
 			return []byte{}, fmt.Errorf("writeForwardRequest error: %w", err)
 		}
-		fmt.Printf("DEBUG: resolver=%s, reqLen=%d, question=%s, header=%x\n", dm.forwardAddress, len(req), dm.questions[i].Name, req[:12])
+
 		_, err = conn.Write(req)
 		if err != nil {
 			return []byte{}, fmt.Errorf("error sending request: %w", err)
 		}
 		resp := make([]byte, 512)
 		n, err := conn.Read(resp)
-		fmt.Printf("DEBUG: responseLen=%d\n", n)
+
 		if err != nil {
 			return []byte{}, fmt.Errorf("error reading response: %w", err)
 		}
