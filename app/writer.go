@@ -124,24 +124,24 @@ func writeQuestion(q Question) ([]byte, error) {
 func (dm *DNSMessage) writeAnswer() ([]byte, error) {
 	dm.header.anCount = dm.header.qCount
 	buf := bytes.NewBuffer([]byte{})
-	for i := 0; i < int(dm.header.qCount); i++ {
-		question, err := writeQuestion(dm.questions[i])
-		if err != nil {
-			return nil, fmt.Errorf("failed to write question: %v", err)
-		}
-		buf.Write(question)
-	}
 	if dm.forwardAddress == "" {
 		testIp := net.ParseIP("127.0.0.1").To4()
-		ttl := uint32(60)
-		if err := binary.Write(buf, binary.BigEndian, ttl); err != nil {
-			return nil, fmt.Errorf("failed to write ttl: %v", err)
+		for i := 0; i < int(dm.header.qCount); i++ {
+			question, err := writeQuestion(dm.questions[i])
+			if err != nil {
+				return nil, fmt.Errorf("failed to write question: %v", err)
+			}
+			buf.Write(question)
+			ttl := uint32(60)
+			if err := binary.Write(buf, binary.BigEndian, ttl); err != nil {
+				return nil, fmt.Errorf("failed to write ttl: %v", err)
+			}
+			length := uint16(len(testIp))
+			if err := binary.Write(buf, binary.BigEndian, length); err != nil {
+				return nil, fmt.Errorf("failed to write length: %v", err)
+			}
+			buf.Write(testIp)
 		}
-		length := uint16(len(testIp))
-		if err := binary.Write(buf, binary.BigEndian, length); err != nil {
-			return nil, fmt.Errorf("failed to write length: %v", err)
-		}
-		buf.Write(testIp)
 
 		return buf.Bytes(), nil
 	}
@@ -150,7 +150,6 @@ func (dm *DNSMessage) writeAnswer() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to forward request: %v", err)
 	}
-	buf.Write(answers)
 
-	return buf.Bytes(), nil
+	return answers, nil
 }
