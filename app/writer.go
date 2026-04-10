@@ -58,13 +58,25 @@ func writeFlags(f Flags, isForwarding bool) uint16 {
 		qr = uint16(1)
 	}
 	flags |= qr << 15
-	opcode := f.opCode
+	var opcode uint16
+	if isForwarding {
+		opcode = uint16(0)
+	} else {
+
+		opcode = f.opCode
+	}
 	flags |= opcode << 11
 	aa := f.aa
 	flags |= aa << 10
 	truncation := f.truncation
 	flags |= truncation << 9
-	recursionDesired := f.rd
+	var recursionDesired uint16
+	if isForwarding {
+		recursionDesired = uint16(1)
+	} else {
+		recursionDesired = f.rd
+
+	}
 	flags |= recursionDesired << 8
 	recursionAvailable := uint16(0)
 	flags |= recursionAvailable << 7
